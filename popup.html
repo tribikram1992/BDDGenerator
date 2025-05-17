@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Selenium POM Recorder - Popup</title>
+  <style>
+    body {
+      margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      width: 360px; min-height: 480px; background: #f4f4f8; color: #222;
+      display: flex; flex-direction: column;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+    #urlSection {
+      display: flex;
+      margin-bottom: 8px;
+      gap: 8px;
+    }
+    #url-input {
+      flex-grow: 1;
+      padding: 6px 8px;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    #load-url-button {
+      background: #3f51b5;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.3s;
+    }
+    #load-url-button:hover {
+      background: #2c3e9f;
+    }
+    #actionsList {
+      flex: 1 1 auto;
+      margin: 0; padding: 0;
+      overflow-y: auto;
+      list-style: none;
+      border: 1px solid #ccc;
+      background: white;
+      max-height: 260px;
+      font-size: 0.9rem;
+    }
+    #actionsList li {
+      padding: 8px 12px;
+      border-bottom: 1px solid #eee;
+    }
+    #actionsList li:last-child {
+      border-bottom: none;
+    }
+    #buttons {
+      padding: 10px 0;
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+      background: white;
+      border-top: 1px solid #ccc;
+      margin-top: 8px;
+    }
+    button {
+      flex: 1 1 auto;
+      background: #3f51b5;
+      border: none;
+      color: white;
+      font-weight: 600;
+      padding: 10px 0;
+      border-radius: 4px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.3s;
+    }
+    button:hover {
+      background: #2c3e9f;
+    }
+    button:disabled {
+      background: #a3a3c7;
+      cursor: not-allowed;
+    }
+    #codeOutput {
+      margin: 12px 0 0 0;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      font-family: Consolas, 'Courier New', monospace;
+      border-radius: 6px;
+      padding: 10px;
+      max-height: 180px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div id="urlSection">
+    <input type="text" id="url-input" placeholder="Enter URL here" />
+    <button id="load-url-button">Load URL</button>
+  </div>
+
+  <ul id="actionsList">
+    <li>(No actions recorded)</li>
+  </ul>
+  <div>
+  <input id = "scenarioNameInput"></input>
+  <button id="scenarioNameBtn" disabled>Scenario Name</button>
+  </div>
+  <div id="buttons">
+    <button id="clearBtn" disabled>Clear</button>
+    <button id="generateBtn" disabled>Generate JSON</button>
+  </div>
+
+  <pre id="codeOutput" style="display:none;"></pre>
+
+  <script src="popup.js"></script>
+</body>
+</html>
