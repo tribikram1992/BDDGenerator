@@ -63,7 +63,7 @@
     const xpath = getXPath(element);
     const framePath = getFrameChain(window);
 
-    return framePath ? `${framePath}||${xpath}` : xpath;
+    return { xpath, iFrame: framePath }; // Split for JSON output
   }
 
   function sendAction(action) {
@@ -73,7 +73,7 @@
   function onClick(e) {
     if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
 
-    const selector = getXPathWithFrames(e.target);
+    const { xpath, iFrame } = getXPathWithFrames(e.target);
     let actionType = 'click';
     const elementName = e.target.name || e.target.id || e.target.className || '';
     if (e.target.tagName.toLowerCase() === 'button') {
@@ -81,7 +81,8 @@
     }
     const action = {
       type: actionType,
-      xpath: selector,
+      xpath: xpath,
+      iFrame: iFrame,
       name: elementName,
       timestamp: Date.now()
     };
@@ -91,12 +92,13 @@
   const inputTimers = new Map();
   const inputValues = new Map();
 
-  function sendInputAction(el, selector) {
+  function sendInputAction(el, xpath, iFrame) {
     const value = inputValues.get(el) || '';
     const elementName = el.name || el.id || el.className || '';
     const action = {
       type: 'input',
-      xpath: selector,
+      xpath: xpath,
+      iFrame: iFrame,
       value: value,
       name: elementName,
       timestamp: Date.now()
@@ -110,20 +112,25 @@
     const el = e.target;
     if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && !el.isContentEditable) return;
 
-    const selector = getXPathWithFrames(el);
+    const { xpath, iFrame } = getXPathWithFrames(el);
     inputValues.set(el, el.value || el.textContent || '');
+    el._lastXpath = xpath;
+    el._lastIFrame = iFrame;
   }
 
   function onBlur(e) {
     const el = e.target;
     if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && !el.isContentEditable) return;
 
-    const selector = getXPathWithFrames(el);
+    const xpath = el._lastXpath;
+    const iFrame = el._lastIFrame;
+    if (!xpath) return;
+
     if (inputTimers.has(el)) {
       clearTimeout(inputTimers.get(el));
-      sendInputAction(el, selector);
+      sendInputAction(el, xpath, iFrame);
     } else if (inputValues.has(el)) {
-      sendInputAction(el, selector);
+      sendInputAction(el, xpath, iFrame);
     }
   }
 
