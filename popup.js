@@ -20,7 +20,7 @@ function renderActions(actions) {
   }
   actions.forEach((action, i) => {
     const li = document.createElement('li');
-    li.textContent = `${i + 1}. Type: ${action.type}, XPath: ${action.xpath}${action.value ? `, Value: "${action.value}"` : ''}`;
+    li.textContent = `${i + 1}. Type: ${action.type}, XPath: ${action.xpath}${action.iFrame ? `, iFrame: ${action.iFrame}` : ''}${action.value ? `, Value: "${action.value}"` : ''}`;
     actionsListEl.appendChild(li);
   });
   clearBtn.disabled = false;
