@@ -12,11 +12,18 @@
       return index;
     }
 
-    function getXPath(el) {
+    function getXPathAndIndex(el) {
       if (el.id) {
         const elemsWithId = el.ownerDocument.querySelectorAll(`#${CSS.escape(el.id)}`);
         if (elemsWithId.length === 1) {
-          return `//*[@id="${el.id}"]`;
+          return { xpath: `//*[@id="${el.id}"]`, index: 0 };
+        } else if (elemsWithId.length > 1) {
+          // Multiple elements with same ID (invalid HTML but possible)
+          for (let i = 0; i < elemsWithId.length; i++) {
+            if (elemsWithId[i] === el) {
+              return { xpath: `//*[@id="${el.id}"]`, index: i };
+            }
+          }
         }
       }
 
@@ -31,43 +38,87 @@
         currentElem = currentElem.parentNode;
       }
 
-      return '/' + paths.join('/');
+      const xpath = '/' + paths.join('/');
+
+      // Find index of this element among all matches
+      const evaluator = el.ownerDocument;
+      const xpathResult = evaluator.evaluate(
+        xpath,
+        evaluator,
+        null,
+        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+        null
+      );
+      let idx = 0;
+      for (let i = 0; i < xpathResult.snapshotLength; i++) {
+        if (xpathResult.snapshotItem(i) === el) {
+          idx = i;
+          break;
+        }
+      }
+
+      return { xpath, index: idx };
+    }
+
+    // Helper to get the index of a frame element among its sibling frames
+    function getFrameElementIndex(frameElement) {
+      if (!frameElement) return null;
+      const parent = frameElement.parentNode;
+      if (!parent) return null;
+      const tagName = frameElement.tagName;
+      let index = 0;
+      for (let i = 0; i < parent.children.length; i++) {
+        if (parent.children[i].tagName === tagName) {
+          index++;
+          if (parent.children[i] === frameElement) {
+            return index - 1; // 0-based index for Playwright
+          }
+        }
+      }
+      return null;
     }
 
     function getFrameChain(win) {
       let chain = [];
+      let frameIndexes = [];
       let currentWindow = win;
-      // Traverse up until reaching the top window, collecting all containing frames
       while (currentWindow !== window.top) {
         const parentWindow = currentWindow.parent;
         let found = false;
-        // Find which frame in parentWindow contains currentWindow
         for (let i = 0; i < parentWindow.frames.length; i++) {
           if (parentWindow.frames[i] === currentWindow) {
             const frameElements = parentWindow.document.querySelectorAll('iframe, frame');
             const frameElement = frameElements[i];
+            let frameInfo = {};
             if (frameElement) {
-              // Prefer ID for stability, otherwise build XPath
               if (frameElement.id) {
-                chain.unshift(`//*[@id="${frameElement.id}"]`);
+                frameInfo.locator = `//*[@id="${frameElement.id}"]`;
+              } else if (frameElement.name) {
+                frameInfo.locator = `//*[@name="${frameElement.name}"]`;
               } else {
-                chain.unshift(getXPath(frameElement));
+                frameInfo.locator = getXPathAndIndex(frameElement).xpath;
               }
+              frameInfo.index = getFrameElementIndex(frameElement);
+            } else {
+              frameInfo.locator = null;
+              frameInfo.index = null;
             }
+            chain.unshift(frameInfo.locator || '');
+            frameIndexes.unshift(frameInfo.index);
             found = true;
             break;
           }
         }
-        if (!found) break; // Safety check
+        if (!found) break;
         currentWindow = parentWindow;
       }
-      return chain.join('||');
+      return { chain: chain.join('||'), frameIndexes };
     }
 
-    const xpath = getXPath(element);
-    const framePath = getFrameChain(window);
+    const { xpath, index } = getXPathAndIndex(element);
+    const framePathInfo = getFrameChain(window);
 
-    return { xpath, iFrame: framePath }; // Split for JSON output
+    return { xpath, xpathIndex: index, iFrame: framePathInfo.chain, frameIndexes: framePathInfo.frameIndexes };
   }
 
   function sendAction(action) {
@@ -77,7 +128,7 @@
   function onClick(e) {
     if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
 
-    const { xpath, iFrame } = getXPathWithFrames(e.target);
+    const { xpath, xpathIndex, iFrame, frameIndexes } = getXPathWithFrames(e.target);
     let actionType = 'click';
     const elementName = e.target.name || e.target.id || e.target.className || '';
     if (e.target.tagName.toLowerCase() === 'button') {
@@ -86,7 +137,9 @@
     const action = {
       type: actionType,
       xpath: xpath,
+      xpathIndex: xpathIndex,
       iFrame: iFrame,
+      frameIndexes: frameIndexes,
       name: elementName,
       timestamp: Date.now()
     };
@@ -96,13 +149,15 @@
   const inputTimers = new Map();
   const inputValues = new Map();
 
-  function sendInputAction(el, xpath, iFrame) {
+  function sendInputAction(el, xpath, xpathIndex, iFrame, frameIndexes) {
     const value = inputValues.get(el) || '';
     const elementName = el.name || el.id || el.className || '';
     const action = {
       type: 'input',
       xpath: xpath,
+      xpathIndex: xpathIndex,
       iFrame: iFrame,
+      frameIndexes: frameIndexes,
       value: value,
       name: elementName,
       timestamp: Date.now()
@@ -116,10 +171,12 @@
     const el = e.target;
     if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && !el.isContentEditable) return;
 
-    const { xpath, iFrame } = getXPathWithFrames(el);
+    const { xpath, xpathIndex, iFrame, frameIndexes } = getXPathWithFrames(el);
     inputValues.set(el, el.value || el.textContent || '');
     el._lastXpath = xpath;
+    el._lastXpathIndex = xpathIndex;
     el._lastIFrame = iFrame;
+    el._lastFrameIndexes = frameIndexes;
   }
 
   function onBlur(e) {
@@ -127,14 +184,16 @@
     if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && !el.isContentEditable) return;
 
     const xpath = el._lastXpath;
+    const xpathIndex = el._lastXpathIndex;
     const iFrame = el._lastIFrame;
+    const frameIndexes = el._lastFrameIndexes;
     if (!xpath) return;
 
     if (inputTimers.has(el)) {
       clearTimeout(inputTimers.get(el));
-      sendInputAction(el, xpath, iFrame);
+      sendInputAction(el, xpath, xpathIndex, iFrame, frameIndexes);
     } else if (inputValues.has(el)) {
-      sendInputAction(el, xpath, iFrame);
+      sendInputAction(el, xpath, xpathIndex, iFrame, frameIndexes);
     }
   }
 
