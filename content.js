@@ -37,26 +37,30 @@
     function getFrameChain(win) {
       let chain = [];
       let currentWindow = win;
-
+      // Traverse up until reaching the top window, collecting all containing frames
       while (currentWindow !== window.top) {
         const parentWindow = currentWindow.parent;
+        let found = false;
+        // Find which frame in parentWindow contains currentWindow
         for (let i = 0; i < parentWindow.frames.length; i++) {
           if (parentWindow.frames[i] === currentWindow) {
-            const frameElement = parentWindow.document.querySelectorAll('iframe, frame')[i];
+            const frameElements = parentWindow.document.querySelectorAll('iframe, frame');
+            const frameElement = frameElements[i];
             if (frameElement) {
+              // Prefer ID for stability, otherwise build XPath
               if (frameElement.id) {
                 chain.unshift(`//*[@id="${frameElement.id}"]`);
               } else {
-                const frameXPath = getXPath(frameElement);
-                chain.unshift(frameXPath);
+                chain.unshift(getXPath(frameElement));
               }
             }
+            found = true;
             break;
           }
         }
+        if (!found) break; // Safety check
         currentWindow = parentWindow;
       }
-
       return chain.join('||');
     }
 
