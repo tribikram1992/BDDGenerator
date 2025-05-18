@@ -1,203 +1,274 @@
-(function () {
-  function getXPathWithFrames(element) {
-    function getElementIdx(el) {
-      let index = 1;
-      let sibling = el.previousSibling;
-      while (sibling) {
-        if (sibling.nodeType === 1 && sibling.nodeName === el.nodeName) {
-          index++;
-        }
-        sibling = sibling.previousSibling;
-      }
-      return index;
-    }
-
-    function getXPathAndIndex(el) {
-      if (el.id) {
-        const elemsWithId = el.ownerDocument.querySelectorAll(`#${CSS.escape(el.id)}`);
-        if (elemsWithId.length === 1) {
-          return { xpath: `//*[@id="${el.id}"]`, index: 0 };
-        } else if (elemsWithId.length > 1) {
-          // Multiple elements with same ID (invalid HTML but possible)
-          for (let i = 0; i < elemsWithId.length; i++) {
-            if (elemsWithId[i] === el) {
-              return { xpath: `//*[@id="${el.id}"]`, index: i };
-            }
-          }
-        }
-      }
-
-      let paths = [];
-      let currentElem = el;
-
-      while (currentElem && currentElem.nodeType === 1) {
-        const tagName = currentElem.nodeName.toLowerCase();
-        const idx = getElementIdx(currentElem);
-        const part = idx > 1 ? `${tagName}[${idx}]` : tagName;
-        paths.unshift(part);
-        currentElem = currentElem.parentNode;
-      }
-
-      const xpath = '/' + paths.join('/');
-
-      // Find index of this element among all matches
-      const evaluator = el.ownerDocument;
-      const xpathResult = evaluator.evaluate(
-        xpath,
-        evaluator,
-        null,
-        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-        null
-      );
-      let idx = 0;
-      for (let i = 0; i < xpathResult.snapshotLength; i++) {
-        if (xpathResult.snapshotItem(i) === el) {
-          idx = i;
-          break;
-        }
-      }
-
-      return { xpath, index: idx };
-    }
-
-    // Helper to get the index of a frame element among its sibling frames
-    function getFrameElementIndex(frameElement) {
-      if (!frameElement) return null;
-      const parent = frameElement.parentNode;
-      if (!parent) return null;
-      const tagName = frameElement.tagName;
-      let index = 0;
-      for (let i = 0; i < parent.children.length; i++) {
-        if (parent.children[i].tagName === tagName) {
-          index++;
-          if (parent.children[i] === frameElement) {
-            return index - 1; // 0-based index for Playwright
-          }
-        }
-      }
-      return null;
-    }
-
-    function getFrameChain(win) {
-      let chain = [];
-      let frameIndexes = [];
-      let currentWindow = win;
-      while (currentWindow !== window.top) {
-        const parentWindow = currentWindow.parent;
-        let found = false;
-        for (let i = 0; i < parentWindow.frames.length; i++) {
-          if (parentWindow.frames[i] === currentWindow) {
-            const frameElements = parentWindow.document.querySelectorAll('iframe, frame');
-            const frameElement = frameElements[i];
-            let frameInfo = {};
-            if (frameElement) {
-              if (frameElement.id) {
-                frameInfo.locator = `//*[@id="${frameElement.id}"]`;
-              } else if (frameElement.name) {
-                frameInfo.locator = `//*[@name="${frameElement.name}"]`;
-              } else {
-                frameInfo.locator = getXPathAndIndex(frameElement).xpath;
-              }
-              frameInfo.index = getFrameElementIndex(frameElement);
-            } else {
-              frameInfo.locator = null;
-              frameInfo.index = null;
-            }
-            chain.unshift(frameInfo.locator || '');
-            frameIndexes.unshift(frameInfo.index);
-            found = true;
-            break;
-          }
-        }
-        if (!found) break;
-        currentWindow = parentWindow;
-      }
-      return { chain: chain.join('||'), frameIndexes };
-    }
-
-    const { xpath, index } = getXPathAndIndex(element);
-    const framePathInfo = getFrameChain(window);
-
-    return { xpath, xpathIndex: index, iFrame: framePathInfo.chain, frameIndexes: framePathInfo.frameIndexes };
-  }
-
-  function sendAction(action) {
-    chrome.runtime.sendMessage({ type: 'record-action', action });
-  }
-
-  function onClick(e) {
-    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-
-    const { xpath, xpathIndex, iFrame, frameIndexes } = getXPathWithFrames(e.target);
-    let actionType = 'click';
-    const elementName = e.target.name || e.target.id || e.target.className || '';
-    if (e.target.tagName.toLowerCase() === 'button') {
-      actionType = 'button';
-    }
-    const action = {
-      type: actionType,
-      xpath: xpath,
-      xpathIndex: xpathIndex,
-      iFrame: iFrame,
-      frameIndexes: frameIndexes,
-      name: elementName,
-      timestamp: Date.now()
-    };
-    sendAction(action);
-  }
-
-  const inputTimers = new Map();
-  const inputValues = new Map();
-
-  function sendInputAction(el, xpath, xpathIndex, iFrame, frameIndexes) {
-    const value = inputValues.get(el) || '';
-    const elementName = el.name || el.id || el.className || '';
-    const action = {
-      type: 'input',
-      xpath: xpath,
-      xpathIndex: xpathIndex,
-      iFrame: iFrame,
-      frameIndexes: frameIndexes,
-      value: value,
-      name: elementName,
-      timestamp: Date.now()
-    };
-    chrome.runtime.sendMessage({ type: 'record-action', action });
-    inputValues.delete(el);
-    inputTimers.delete(el);
-  }
-
-  function onInput(e) {
-    const el = e.target;
-    if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && !el.isContentEditable) return;
-
-    const { xpath, xpathIndex, iFrame, frameIndexes } = getXPathWithFrames(el);
-    inputValues.set(el, el.value || el.textContent || '');
-    el._lastXpath = xpath;
-    el._lastXpathIndex = xpathIndex;
-    el._lastIFrame = iFrame;
-    el._lastFrameIndexes = frameIndexes;
-  }
-
-  function onBlur(e) {
-    const el = e.target;
-    if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && !el.isContentEditable) return;
-
-    const xpath = el._lastXpath;
-    const xpathIndex = el._lastXpathIndex;
-    const iFrame = el._lastIFrame;
-    const frameIndexes = el._lastFrameIndexes;
-    if (!xpath) return;
-
-    if (inputTimers.has(el)) {
-      clearTimeout(inputTimers.get(el));
-      sendInputAction(el, xpath, xpathIndex, iFrame, frameIndexes);
-    } else if (inputValues.has(el)) {
-      sendInputAction(el, xpath, xpathIndex, iFrame, frameIndexes);
-    }
-  }
-
-  document.addEventListener('click', onClick, true);
-  document.addEventListener('input', onInput, true);
-  document.addEventListener('blur', onBlur, true);
+(function() {
+  const script = document.createElement('script');
+  script.textContent = `
+    (function() {
+      var oldAlert = window.alert;
+      window.alert = function(msg) {
+        window.postMessage({ type: "BDDGEN_ALERT", mode: "alert", value: msg }, "*");
+        return oldAlert.apply(window, arguments);
+      };
+      var oldConfirm = window.confirm;
+      window.confirm = function(msg) {
+        var res = oldConfirm.apply(window, arguments);
+        window.postMessage({ type: "BDDGEN_ALERT", mode: "confirm", value: msg, result: res }, "*");
+        return res;
+      };
+      var oldPrompt = window.prompt;
+      window.prompt = function(msg, defaultTxt) {
+        var res = oldPrompt.apply(window, arguments);
+        window.postMessage({ type: "BDDGEN_ALERT", mode: "prompt", value: msg, result: res }, "*");
+        return res;
+      };
+    })();
+  `;
+  document.documentElement.appendChild(script);
 })();
+
+window.addEventListener("message", function(event) {
+  if (event.data && event.data.type === "BDDGEN_ALERT") {
+    sendActionToBackground({
+      type: event.data.mode,
+      locator: "",
+      locatorType: "alert",
+      elementType: "alert",
+      suggestedName: "alert_" + (event.data.value || "Alert"),
+      allLocators: [],
+      alertText: event.data.value,
+      alertResult: typeof event.data.result !== "undefined" ? event.data.result : null,
+      windowNumber: window.name || '',
+      frame: getFramePath(),
+      value: typeof event.data.result !== "undefined" ? event.data.result : null,
+      target: "",
+      options: [],
+      time: Date.now()
+    });
+  }
+});
+
+function isActionable(el) {
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName.toLowerCase();
+  if (["button", "a", "input", "select", "textarea", "label", "option"].includes(tag)) return true;
+  if (el.type && ["button", "checkbox", "radio", "submit", "reset", "date"].includes(el.type)) return true;
+  if (el.type && /date|time/.test(el.type)) return true;
+  return false;
+}
+
+function isDynamicValue(val) {
+  if (!val) return false;
+  if (typeof val !== "string") return false;
+  if (/^\d{5,}$/.test(val)) return true;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)) return true;
+  if (/(ember|react|ng-|auto_|auto-|generated|random|tmp|temp|test|item|row|col|cell)[\-_]?\d+/i.test(val)) return true;
+  if (/^[a-f0-9]{8,}$/.test(val) && !/^[a-z]+$/.test(val)) return true;
+  if (val.length > 18) return true;
+  return false;
+}
+
+function getRelativeXPath(el) {
+  if (el.id && !isDynamicValue(el.id)) return `.//*[@id='${el.id}']`;
+  if (el.name && !isDynamicValue(el.name)) return `.//*[@name='${el.name}']`;
+  if (el.textContent && el.textContent.trim().length > 2) {
+    let text = el.textContent.trim();
+    let found = document.evaluate(`.//*[normalize-space(text())='${text}']`, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    if (found.snapshotLength === 1 && found.snapshotItem(0) === el) {
+      return `.//*[normalize-space(text())='${text}']`;
+    }
+  }
+  if (el.classList && el.classList.length) {
+    let className = el.classList[0];
+    let found = document.getElementsByClassName(className);
+    if (found.length === 1 && found[0] === el) {
+      return `.//*[contains(@class, '${className}')]`;
+    }
+  }
+  let path = [];
+  while (el && el.nodeType === 1 && el !== document.body) {
+    let index = 1, sib = el.previousElementSibling;
+    while (sib) {
+      if (sib.nodeName === el.nodeName) index++;
+      sib = sib.previousElementSibling;
+    }
+    path.unshift(el.nodeName.toLowerCase() + (index > 1 ? `[${index}]` : ''));
+    el = el.parentElement;
+  }
+  return `.//${path.join('/')}`;
+}
+
+function getElementType(element) {
+  const tag = element.tagName ? element.tagName.toLowerCase() : '';
+  if (["table", "tr", "td", "th", "tbody", "thead", "tfoot"].includes(tag)) return "table";
+  if (tag === 'select') return 'dropdown';
+  if (tag === 'input') {
+    const type = element.getAttribute('type');
+    if (type === 'checkbox') return 'checkBox';
+    if (type === 'radio') return 'radioButton';
+    if (type === 'password') return 'password';
+    if (type === 'file') return 'file';
+    if (type === 'submit') return 'button';
+    if (type === 'button') return 'button';
+    return 'input';
+  }
+  if (tag === 'button') return 'button';
+  if (tag === 'a') return 'link';
+  if (tag === 'textarea') return 'textArea';
+  return tag;
+}
+
+function getSuggestedName(element) {
+  let type = getElementType(element);
+  let label = element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.getAttribute('name') || element.id || element.textContent || "";
+  label = label.replace(/\s+/g, '_').replace(/[^\w]/g, '').slice(0, 20) || 'elem';
+  return `${type}_${label}`;
+}
+
+function getDropdownOptions(element) {
+  if (element.tagName && element.tagName.toLowerCase() === "select") {
+    return Array.from(element.options).map(o => o.value || o.textContent);
+  }
+  return [];
+}
+
+function getUniqueLocators(element) {
+  const locs = [];
+  if (element.id && !isDynamicValue(element.id)) {
+    locs.push({ type: 'id', value: `.//*[@id='${element.id}']` });
+  }
+  if (element.name && !isDynamicValue(element.name)) {
+    locs.push({ type: 'name', value: `.//*[@name='${element.name}']` });
+  }
+  if (element.tagName && element.tagName.toLowerCase() === 'a' && element.textContent) {
+    const anchors = Array.from(document.getElementsByTagName("a")).filter(a => a.textContent.trim() === element.textContent.trim());
+    if (anchors.length === 1 && anchors[0] === element) {
+      locs.push({ type: 'linkText', value: element.textContent.trim() });
+    }
+  }
+  const xpath = getRelativeXPath(element);
+  if (xpath) {
+    let res = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    if (res.snapshotLength === 1 && res.snapshotItem(0) === element && !locs.some(l=>l.value===xpath)) {
+      locs.push({ type: 'xpath', value: xpath });
+    }
+  }
+  if (element.className) {
+    let sel = element.tagName.toLowerCase() + '.' + element.className.trim().split(/\s+/).join('.');
+    try {
+      let found = document.querySelectorAll(sel);
+      if (found.length === 1 && found[0] === element) {
+        locs.push({ type: 'css', value: sel });
+      }
+    } catch {}
+  }
+  if (element.className && typeof element.className === 'string') {
+    const className = element.className.trim().split(/\s+/)[0];
+    if (className) {
+      const found = document.getElementsByClassName(className);
+      if (found.length === 1 && found[0] === element) {
+        locs.push({ type: 'className', value: className });
+      }
+    }
+  }
+  if (element.tagName) {
+    const found = document.getElementsByTagName(element.tagName.toLowerCase());
+    if (found.length === 1 && found[0] === element) {
+      locs.push({ type: 'tagName', value: element.tagName.toLowerCase() });
+    }
+  }
+  locs.push({ type: 'jsPath', value: getJsPathString(element) });
+  return locs;
+}
+
+function getJsPath(element) {
+  if (element === document.body)
+    return ['body'];
+  let ix = 0;
+  const siblings = element.parentNode ? element.parentNode.childNodes : [];
+  for (let i = 0; i < siblings.length; i++) {
+    const sibling = siblings[i];
+    if (sibling === element)
+      return getJsPath(element.parentNode).concat([`${element.tagName.toLowerCase()}[${ix}]`]);
+    if (sibling.nodeType === 1 && sibling.tagName === element.tagName)
+      ix++;
+  }
+  return [];
+}
+function getJsPathString(element) {
+  return getJsPath(element).join(' > ');
+}
+
+function getFramePath() {
+  try {
+    let path = [];
+    let win = window;
+    while (win.self !== win.top) {
+      let frame = win.frameElement;
+      if (!frame) break;
+      path.unshift(getRelativeXPath(frame));
+      win = win.parent;
+    }
+    return path.join('||');
+  } catch { return ''; }
+}
+
+function getTargetElement(e) {
+  let el = e.target;
+  if (el.tagName && el.tagName.toLowerCase() === "option" && el.parentElement && el.parentElement.tagName.toLowerCase() === "select") {
+    el = el.parentElement;
+  }
+  return el;
+}
+
+function sendActionToBackground(action) {
+  chrome.storage.local.get('activeSessionId', (result) => {
+    if (result && result.activeSessionId) {
+      chrome.runtime.sendMessage({
+        type: 'record-action',
+        action: action,
+        sessionId: result.activeSessionId
+      });
+    }
+  });
+}
+
+document.addEventListener('click', function (e) {
+  const el = getTargetElement(e);
+  if (!isActionable(el)) return;
+  recordAction('click', el, undefined, undefined);
+}, true);
+
+document.addEventListener('change', function(e) {
+  const el = getTargetElement(e);
+  if (!isActionable(el)) return;
+  let value = el.value;
+  if (el.type && /date|time/.test(el.type)) {
+    value = el.value;
+  }
+  recordAction('input', el, value, undefined);
+}, true);
+
+function recordAction(type, element, value, iFrame) {
+  const locators = getUniqueLocators(element);
+  const priority = ["id","name","linkText","xpath","css","className","tagName"];
+  let defaultIdx = locators.findIndex(l => priority.includes(l.type));
+  if (defaultIdx === -1) defaultIdx = 0;
+  let framePath = getFramePath();
+  let options = getDropdownOptions(element);
+  let target = '';
+  try { target = element.outerHTML; } catch { target = ''; }
+  const action = {
+    type,
+    locator: locators[defaultIdx]?.value || "",
+    locatorType: locators[defaultIdx]?.type || "",
+    elementType: getElementType(element),
+    suggestedName: getSuggestedName(element),
+    allLocators: locators,
+    windowNumber: window.name || '',
+    frame: framePath,
+    value,
+    iFrame,
+    target,
+    options,
+    time: Date.now()
+  };
+  sendActionToBackground(action);
+}
